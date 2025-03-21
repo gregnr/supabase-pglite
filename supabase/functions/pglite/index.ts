@@ -1,29 +1,43 @@
-// deno-lint-ignore-file require-await
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { PGlite } from "npm:@electric-sql/pglite@0.2.17";
+import { z } from "npm:zod@3";
+
+const requestSchema = z.object({
+  query: z.string(),
+});
 
 Deno.serve(async (req) => {
-  const upgrade = req.headers.get("upgrade");
-
-  if (upgrade?.toLowerCase() !== "websocket") {
-    return new Response("only websocket connections are allowed", {
+  if (req.method !== "POST") {
+    return new Response("only POST requests are allowed", {
       status: 400,
     });
   }
 
-  const { socket, response } = Deno.upgradeWebSocket(req);
+  if (!req.headers.get("content-type")?.includes("application/json")) {
+    return new Response("only JSON requests are allowed", {
+      status: 400,
+    });
+  }
+
+  const body = await req.json();
+
+  const { data, error } = requestSchema.safeParse(body);
+
+  if (error) {
+    return new Response(error.message, {
+      status: 400,
+    });
+  }
+
+  const query = data.query;
 
   const db = new PGlite();
 
-  socket.onopen = () => console.log("socket opened");
+  const result = await db.query(query);
 
-  socket.onmessage = async (e) => {
-    const result = await db.query(e.data);
-    socket.send(JSON.stringify(result.rows));
-  };
-
-  socket.onerror = (e) => console.log("socket errored:", e);
-  socket.onclose = () => console.log("socket closed");
-
-  return response;
+  return new Response(JSON.stringify(result.rows), {
+    headers: {
+      "content-type": "application/json",
+    },
+  });
 });
